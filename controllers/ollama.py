@@ -345,6 +345,7 @@ def ollama_generate():
     openai_data = {
         "model": model,
         "messages": messages,
+        "images": images,
         "stream": stream,
         "incremental_output": True,
         "temperature": data.get('temperature', 0.7),

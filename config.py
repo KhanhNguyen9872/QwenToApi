@@ -3,6 +3,7 @@ x_request_id = str(uuid.uuid4())
 
 # Application version
 VERSION = "1.0.2"
+TMP_FOLDER = "./tmp"
 
 # URLs
 QWEN_API_BASE = "https://chat.qwen.ai/api"
