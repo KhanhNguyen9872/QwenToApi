@@ -1276,7 +1276,9 @@ Escape    - Close popup windows
             if isinstance(self.current_request_body, dict):
                 import json
                 try:
-                    formatted_body = json.dumps(self.current_request_body, indent=2, ensure_ascii=False)
+                    # Create a copy to modify for display
+                    display_body = self._prepare_request_body_for_display(self.current_request_body)
+                    formatted_body = json.dumps(display_body, indent=2, ensure_ascii=False)
                     self.route_text.insert(tk.END, formatted_body)
 
                     # Simple JSON syntax highlighting
@@ -1298,6 +1300,28 @@ Escape    - Close popup windows
         # Keep current scroll position - never force scroll to top
         # This prevents the annoying auto-scroll behavior
         pass
+
+    def _prepare_request_body_for_display(self, request_body):
+        """Prepare request body for display by shortening image data"""
+        import copy
+        
+        # Create a deep copy to avoid modifying the original
+        display_body = copy.deepcopy(request_body)
+        
+        # Process messages array if it exists
+        if 'messages' in display_body and isinstance(display_body['messages'], list):
+            for message in display_body['messages']:
+                if isinstance(message, dict) and 'images' in message:
+                    images = message['images']
+                    if isinstance(images, list):
+                        # Replace image data with [image1, image2, ...]
+                        image_count = len(images)
+                        if image_count == 1:
+                            message['images'] = ['[image1]']
+                        else:
+                            message['images'] = [f'[image{i+1}]' for i in range(image_count)]
+        
+        return display_body
 
     def _update_server_status(self):
         """Update server status in the status bar"""
