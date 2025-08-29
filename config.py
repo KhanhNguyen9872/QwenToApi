@@ -16,6 +16,7 @@ qwen_version = "0.0.191"
 qwen_host = "chat.qwen.ai"
 qwen_origin = "https://chat.qwen.ai"
 qwen_referer = "https://chat.qwen.ai/c/guest"
+curl_user_agent = "curl/8.12.1"
 
 QWEN_HEADERS = {
     "Accept": "*/*",

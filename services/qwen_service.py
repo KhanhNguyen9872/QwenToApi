@@ -7,20 +7,10 @@ import os
 import base64
 import hashlib
 from urllib.parse import urlparse, parse_qs, unquote_plus
-from config import QWEN_HEADERS, QWEN_MODELS_URL, QWEN_NEW_CHAT_URL, QWEN_CHAT_COMPLETIONS_URL, TMP_FOLDER
+from config import QWEN_HEADERS, QWEN_MODELS_URL, QWEN_NEW_CHAT_URL, QWEN_CHAT_COMPLETIONS_URL, TMP_FOLDER, curl_user_agent
 from utils.cookie_parser import build_header
 
 logger = logging.getLogger(__name__)
-
-def _parse_url_params(url: str) -> dict:
-    try:
-        parsed = urlparse(url)
-        query_dict = parse_qs(parsed.query, keep_blank_values=True)
-        decoded_params = {k: [unquote_plus(v) for v in vals] for k, vals in query_dict.items()}
-        simple_params = {k: v[0] if isinstance(v, list) and len(v) == 1 else v for k, v in decoded_params.items()}
-        return simple_params
-    except Exception:
-        return {}
 
 """Cache global cho ảnh đã upload: [{ 'file_url': str, 'hashed': str }]"""
 images_hashed = []
@@ -96,9 +86,12 @@ class QwenService:
             # Clear cache ảnh khi tạo chat mới
             global images_hashed
             try:
+                cache_size = len(images_hashed)
                 images_hashed.clear()
+                logger.info(f"Cleared image cache ({cache_size} images)")
             except Exception:
                 images_hashed = []
+                logger.info("Reset image cache")
 
             chat_data = {
                 "title": "New Chat",
@@ -184,9 +177,8 @@ class QwenService:
                 "models": [model],
                 "chat_type": "t2t",
                 "feature_config": {
-                    "thinking_enabled": True,
-                    "output_schema": "phase",
-                    "thinking_budget": 2048
+                    "thinking_enabled": False,
+                    "output_schema": "phase"
                 },
                 "extra": {
                     "meta": {
@@ -198,7 +190,7 @@ class QwenService:
             }
 
             uploaded_files = []
-            # Upload ảnh lên Qwen nếu có
+            # Upload ảnh lên 0x0.st nếu có
             try:
                 images = []
                 # Ảnh từ cấp cao (/api/generate)
@@ -214,6 +206,7 @@ class QwenService:
                                 images.append(imgs)
                 except Exception as _e:
                     logger.warning(f"Collect message images failed: {_e}")
+                
                 if images:
                     # Đảm bảo thư mục tạm
                     try:
@@ -222,14 +215,10 @@ class QwenService:
                     except Exception as _e:
                         logger.warning(f"Cannot create tmp folder {TMP_FOLDER}: {_e}")
 
-                    sts_url = "https://chat.qwen.ai/api/v2/files/getstsToken"
-                    base_headers = build_header(QWEN_HEADERS)
-
                     for img in images:
                         # Decode base64 (hỗ trợ data URL)
                         img_bytes = None
                         ext = "jpg"
-                        mime_type = "image/jpeg"
                         try:
                             if isinstance(img, str) and img.startswith("data:") and ";base64," in img:
                                 header, b64data = img.split(",", 1)
@@ -237,7 +226,6 @@ class QwenService:
                                     mime = header.split(":", 1)[1].split(";")[0]
                                     if "/" in mime:
                                         ext = mime.split("/", 1)[1] or ext
-                                        mime_type = mime or mime_type
                                 except Exception:
                                     pass
                                 img_bytes = base64.b64decode(b64data)
@@ -254,24 +242,60 @@ class QwenService:
                         # Hash nội dung ảnh để kiểm tra cache
                         try:
                             hashed = hashlib.sha256(img_bytes).hexdigest()
+                            logger.info(f"Image hash: {hashed[:8]}... (size: {len(img_bytes)} bytes)")
                         except Exception:
                             hashed = None
+                            logger.warning("Cannot calculate image hash")
 
                         # Nếu đã upload trước đó, tái sử dụng URL
                         try:
                             if hashed:
                                 cached = next((it for it in images_hashed if it.get('hashed') == hashed), None)
+                                if cached:
+                                    logger.info(f"Found cached image: {cached.get('file_url')}")
+                                else:
+                                    logger.info(f"No cache found for hash: {hashed[:8]}...")
                             else:
                                 cached = None
                         except Exception:
                             cached = None
 
                         if cached and cached.get('file_url'):
+                            logger.info(f"Using cached image URL: {cached.get('file_url')}")
+                            # Lấy filename từ URL
+                            cached_url = cached.get('file_url')
+                            url_filename = cached_url.split('/')[-1].split('?')[0] if '/' in cached_url else f"cached_{uuid.uuid4().hex}.{ext}"
+                            
                             uploaded_files.append({
-                                "name": f"CACHED_{uuid.uuid4().hex}.{ext}",
-                                "size": len(img_bytes),
                                 "type": "image",
-                                "url": cached.get('file_url')
+                                "file": {
+                                    "created_at": int(time.time() * 1000),
+                                    "data": {},
+                                    "filename": url_filename,
+                                    "hash": None,
+                                    "id": str(uuid.uuid4()),
+                                    "user_id": str(uuid.uuid4()),
+                                    "meta": {
+                                        "name": url_filename,
+                                        "size": len(img_bytes),
+                                        "content_type": f"image/{ext}"
+                                    },
+                                    "update_at": int(time.time() * 1000)
+                                },
+                                "id": str(uuid.uuid4()),
+                                "url": cached_url,
+                                "name": url_filename,
+                                "collection_name": "",
+                                "progress": 0,
+                                "status": "uploaded",
+                                "greenNet": "success",
+                                "size": len(img_bytes),
+                                "error": "",
+                                "itemId": str(uuid.uuid4()),
+                                "file_type": f"image/{ext}",
+                                "showType": "image",
+                                "file_class": "vision",
+                                "uploadTaskId": str(uuid.uuid4())
                             })
                             continue
 
@@ -286,140 +310,71 @@ class QwenService:
                             logger.warning(f"Cannot write temp image {tmp_path}: {_e}")
                             continue
 
-                        filesize = len(img_bytes)
-
-                        payload = {
-                            "filename": filename,
-                            "filesize": filesize,
-                            "filetype": "image"
-                        }
-
-                        # Gọi getstsToken
-                        file_url = None
-                        security_token = None
+                        # Upload lên 0x0.st
                         try:
-                            resp = requests.post(sts_url, json=payload, headers=base_headers, timeout=1)
-                            resp_json = resp.json() if resp is not None else {}
-                            if isinstance(resp_json, dict) and resp_json.get("success") is True:
-                                file_url = ((resp_json.get("data") or {}).get("file_url"))
-                                security_token = ((resp_json.get("data") or {}).get("security_token"))
-                        except Exception as _e:
-                            logger.warning(f"getstsToken failed for {filename}: {_e}")
-
-                        if not file_url:
-                            continue
-
-                        # Tạo authorization từ file_url
-                        auth_params = _parse_url_params(file_url)
-                        try:
-                            authorization = f"{auth_params.get('x-oss-signature-version')} Credential={auth_params.get('x-oss-credential')},Signature={auth_params.get('x-oss-signature')}"
-                        except Exception:
-                            authorization = None
-
-                        # PUT file lên Qwen
-                        put_url = None
-                        try:
-                            # Header đầy đủ theo yêu cầu OSS
-                            put_headers = {}
-                            if authorization:
-                                put_headers["authorization"] = authorization
-                            # Headers từ QWEN_HEADERS
-                            try:
-                                put_headers["Accept"] = QWEN_HEADERS.get("Accept", "*/*")
-                                put_headers["Accept-Encoding"] = QWEN_HEADERS.get("Accept-Encoding", "gzip, deflate, br, zstd")
-                                if QWEN_HEADERS.get("Accept-Language"):
-                                    put_headers["Accept-Language"] = QWEN_HEADERS.get("Accept-Language")
-                                if QWEN_HEADERS.get("Origin"):
-                                    put_headers["Origin"] = QWEN_HEADERS.get("Origin")
-                                if QWEN_HEADERS.get("Referer"):
-                                    put_headers["Referer"] = QWEN_HEADERS.get("Referer")
-                                if QWEN_HEADERS.get("User-Agent"):
-                                    put_headers["User-Agent"] = QWEN_HEADERS.get("User-Agent")
-                                # Optional fetch hints
-                                if QWEN_HEADERS.get("sec-ch-ua"):
-                                    put_headers["sec-ch-ua"] = QWEN_HEADERS.get("sec-ch-ua")
-                                if QWEN_HEADERS.get("sec-ch-ua-mobile"):
-                                    put_headers["sec-ch-ua-mobile"] = QWEN_HEADERS.get("sec-ch-ua-mobile")
-                                if QWEN_HEADERS.get("sec-ch-ua-platform"):
-                                    put_headers["sec-ch-ua-platform"] = QWEN_HEADERS.get("sec-ch-ua-platform")
-                                put_headers["Sec-Fetch-Dest"] = "empty"
-                                put_headers["Sec-Fetch-Mode"] = "cors"
-                                put_headers["Sec-Fetch-Site"] = "cross-site"
-                            except Exception:
-                                pass
-
-                            # OSS required headers
-                            put_headers["x-oss-content-sha256"] = "UNSIGNED-PAYLOAD"
-                            if auth_params.get("x-oss-date"):
-                                put_headers["x-oss-date"] = auth_params.get("x-oss-date")
-                            if security_token:
-                                put_headers["x-oss-security-token"] = security_token
-                            # Not strictly required but mimic browser
-                            put_headers["x-oss-user-agent"] = "aliyun-sdk-js/6.23.0 Chrome 139.0.0.0 on Windows 10 64-bit"
-                            put_headers["Connection"] = "keep-alive"
-
-                            # Content-Type theo loại ảnh
-                            put_headers["Content-Type"] = mime_type
-                            # Host header
-                            put_headers["Host"] = "qwen-webui-prod.oss-accelerate.aliyuncs.com"
-                            put_url = file_url.split("?", 1)[0]
-                            put_resp = requests.put(put_url, headers=put_headers, data=img_bytes, timeout=1)
-                            logger.info(f"PUT image {filename} -> {put_resp.status_code}")
-                            uploaded_files.append({
-                                "name": filename,
-                                "size": filesize,
-                                "type": "image",
-                                "url": put_url
-                            })
-                            # Lưu vào cache toàn cục
-                            try:
-                                if hashed and put_url:
-                                    images_hashed.append({
-                                        "file_url": put_url,
-                                        "hashed": hashed
-                                    })
-                            except Exception:
-                                pass
-
-                            # Xác thực bằng GET sau khi upload
-                            try:
-                                # Ưu tiên GET base URL; nếu không 200 thì thử GET full signed URL
-                                get_headers = {}
-                                try:
-                                    get_headers["Accept"] = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
-                                    get_headers["Accept-Encoding"] = QWEN_HEADERS.get("Accept-Encoding", "gzip, deflate, br, zstd")
-                                    if QWEN_HEADERS.get("Accept-Language"):
-                                        get_headers["Accept-Language"] = QWEN_HEADERS.get("Accept-Language")
-                                    if QWEN_HEADERS.get("Referer"):
-                                        get_headers["Referer"] = QWEN_HEADERS.get("Referer")
-                                    if QWEN_HEADERS.get("User-Agent"):
-                                        get_headers["User-Agent"] = QWEN_HEADERS.get("User-Agent")
-                                    if QWEN_HEADERS.get("sec-ch-ua"):
-                                        get_headers["sec-ch-ua"] = QWEN_HEADERS.get("sec-ch-ua")
-                                    if QWEN_HEADERS.get("sec-ch-ua-mobile"):
-                                        get_headers["sec-ch-ua-mobile"] = QWEN_HEADERS.get("sec-ch-ua-mobile")
-                                    if QWEN_HEADERS.get("sec-ch-ua-platform"):
-                                        get_headers["sec-ch-ua-platform"] = QWEN_HEADERS.get("sec-ch-ua-platform")
-                                    get_headers["Sec-Fetch-Dest"] = "image"
-                                    get_headers["Sec-Fetch-Mode"] = "no-cors"
-                                    get_headers["Sec-Fetch-Site"] = "cross-site"
-                                except Exception:
-                                    pass
-
-                                get_resp = requests.get(put_url, headers=get_headers, timeout=1)
-                                if get_resp.status_code != 200:
-                                    # Thử lại với full URL có query (nếu cần token)
-                                    try:
-                                        get_resp2 = requests.get(file_url, headers=get_headers, timeout=1)
-                                        logger.info(f"GET verify image (fallback) {filename} -> {get_resp2.status_code}")
-                                    except Exception as _e:
-                                        logger.warning(f"GET verify (fallback) failed for {filename}: {_e}")
+                            with open(tmp_path, 'rb') as f:
+                                files = {'file': (filename, f, 'image/jpeg')}
+                                headers = {
+                                    'User-Agent': curl_user_agent,
+                                    'Accept': '*/*'
+                                }
+                                response = requests.post('https://0x0.st', files=files, headers=headers, timeout=30)
+                                
+                                if response.status_code == 200:
+                                    file_url = response.text.strip()
+                                    if file_url.startswith('http'):
+                                        logger.info(f"Upload image {filename} -> {file_url}")
+                                        # Lấy filename từ URL
+                                        url_filename = file_url.split('/')[-1].split('?')[0] if '/' in file_url else filename
+                                        
+                                        uploaded_files.append({
+                                            "type": "image",
+                                            "file": {
+                                                "created_at": int(time.time() * 1000),
+                                                "data": {},
+                                                "filename": url_filename,
+                                                "hash": None,
+                                                "id": str(uuid.uuid4()),
+                                                "user_id": str(uuid.uuid4()),
+                                                "meta": {
+                                                    "name": url_filename,
+                                                    "size": len(img_bytes),
+                                                    "content_type": f"image/{ext}"
+                                                },
+                                                "update_at": int(time.time() * 1000)
+                                            },
+                                            "id": str(uuid.uuid4()),
+                                            "url": file_url,
+                                            "name": url_filename,
+                                            "collection_name": "",
+                                            "progress": 0,
+                                            "status": "uploaded",
+                                            "greenNet": "success",
+                                            "size": len(img_bytes),
+                                            "error": "",
+                                            "itemId": str(uuid.uuid4()),
+                                            "file_type": f"image/{ext}",
+                                            "showType": "image",
+                                            "file_class": "vision",
+                                            "uploadTaskId": str(uuid.uuid4())
+                                        })
+                                        # Lưu vào cache toàn cục
+                                        try:
+                                            if hashed and file_url:
+                                                images_hashed.append({
+                                                    "file_url": file_url,
+                                                    "hashed": hashed
+                                                })
+                                                logger.info(f"Saved to cache: {hashed[:8]}... -> {file_url}")
+                                                logger.info(f"Cache size: {len(images_hashed)} images")
+                                        except Exception as _e:
+                                            logger.warning(f"Failed to save to cache: {_e}")
+                                    else:
+                                        logger.warning(f"Invalid response from 0x0.st for {filename}: {file_url}")
                                 else:
-                                    logger.info(f"GET verify image {filename} -> {get_resp.status_code}")
-                            except Exception as _e:
-                                logger.warning(f"GET verify failed for {filename}: {_e}")
+                                    logger.warning(f"Upload to 0x0.st failed for {filename}: {response.status_code} - {response.text}")
                         except Exception as _e:
-                            logger.warning(f"Upload image to Qwen failed for {filename}: {_e}")
+                            logger.warning(f"Upload image to 0x0.st failed for {filename}: {_e}")
                         finally:
                             # Xóa file tạm
                             try:
