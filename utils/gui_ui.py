@@ -1241,6 +1241,14 @@ Escape    - Close popup windows
         if not hasattr(self, 'route_text'):
             return
 
+        # Check if content has actually changed to avoid unnecessary updates
+        current_content = f"{self.current_route}|{str(self.current_request_body)}"
+        if hasattr(self, '_last_route_content') and self._last_route_content == current_content:
+            return  # No change, don't update
+        
+        # Store current content for next comparison
+        self._last_route_content = current_content
+
         # Enable editing temporarily
         self.route_text.config(state=tk.NORMAL)
         self.route_text.delete(1.0, tk.END)
@@ -1287,8 +1295,9 @@ Escape    - Close popup windows
         # Disable editing
         self.route_text.config(state=tk.DISABLED)
 
-        # Scroll to top
-        self.route_text.see(1.0)
+        # Keep current scroll position - never force scroll to top
+        # This prevents the annoying auto-scroll behavior
+        pass
 
     def _update_server_status(self):
         """Update server status in the status bar"""
