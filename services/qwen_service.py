@@ -131,6 +131,12 @@ class QwenService:
                 elif role == 'user':
                     # User message - thêm vào context
                     context_parts.append(f"User: {content}")
+                elif role == 'template':
+                    # Assistant message - thêm vào context
+                    context_parts.append(f"Assistant: {content}")
+                elif role == 'prompt':
+                    # Prompt message - thêm vào context
+                    context_parts.append(f"Prompt: {content}")
                 elif role == 'assistant':
                     # Assistant message - thêm vào context
                     context_parts.append(f"Assistant: {content}")
@@ -154,7 +160,7 @@ class QwenService:
                 "feature_config": {
                     "thinking_enabled": True,
                     "output_schema": "phase",
-                    "thinking_budget": 1024
+                    "thinking_budget": 2048
                 },
                 "extra": {
                     "meta": {

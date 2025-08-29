@@ -317,14 +317,15 @@ def ollama_generate():
     data = request.json_data
     model = data.get('model', 'qwen3-235b-a22b')
     prompt = data.get('prompt', '')
+    template = data.get('template', '')
     stream = data.get('stream', True)
     suffix = data.get('suffix')
     images = data.get('images')
     format_opt = data.get('format')
     options = data.get('options')
     system = data.get('system')
-    template = data.get('template')
     context = data.get('context')
+    images = data.get('images', [])
     raw = data.get('raw')
     keep_alive = data.get('keep_alive')
     if model.endswith(':latest'):
@@ -333,10 +334,17 @@ def ollama_generate():
     route_info = f"POST /api/generate - Ollama Generate ({model}, stream: {stream})"
     ui_manager.update_route(route_info, _make_display_data_short(data))
 
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    if prompt:
+        messages.append({"role": "prompt", "content": prompt})
+    if template:
+        messages.append({"role": "template", "content": template})
+
     openai_data = {
         "model": model,
-        "messages": [{"role": "system", "content": system}] if system else []
-                    + ([{"role": "user", "content": prompt}] if prompt is not None else []),
+        "messages": messages,
         "stream": stream,
         "incremental_output": True,
         "temperature": data.get('temperature', 0.7),
