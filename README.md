@@ -1,4 +1,4 @@
-# QwenToApi v1.0.1 - Qwen API Integration
+# QwenToApi - Qwen API Integration
 
 Server tùy chỉnh tích hợp với Qwen API, hỗ trợ cả LM Studio và Ollama format với giao diện GUI hiện đại.
 
