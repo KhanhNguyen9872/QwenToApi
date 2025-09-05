@@ -115,6 +115,133 @@ def get_cached_qwen_models(force_refresh: bool = False):
 # Make cached models accessor available to controllers
 app.config['get_cached_qwen_models'] = get_cached_qwen_models
 
+def load_ui_settings():
+    """Đọc cấu hình từ ui_settings.json"""
+    try:
+        import json
+        with open('ui_settings.json', 'r', encoding='utf-8') as f:
+            settings = json.load(f)
+        return settings
+    except Exception as e:
+        logger.warning(f"Không thể đọc ui_settings.json: {e}")
+        # Trả về giá trị mặc định
+        return {
+            "ip_address": "127.0.0.1",
+            "port": 11434,
+            "mode": "ollama"
+        }
+
+def get_max_context_length(host: str = None, port: int = None):
+    """Lấy max context length từ tất cả models và set environment variables"""
+    try:
+        # Đọc config từ ui_settings.json
+        settings = load_ui_settings()
+        
+        # Sử dụng host/port từ tham số hoặc từ config
+        if host is None:
+            host = settings.get("ip_address", "127.0.0.1")
+        if port is None:
+            port = settings.get("port", 11434)
+        
+        models = get_cached_qwen_models()
+        if not models:
+            logger.warning("Không có models nào để lấy context length")
+            return None
+        
+        context_lengths = []
+        for model in models:
+            try:
+                info = model.get('info', {})
+                meta = info.get('meta', {})
+                max_context = meta.get('max_context_length')
+                if max_context and isinstance(max_context, (int, float)):
+                    context_lengths.append(int(max_context))
+                    logger.info(f"Model {model.get('id', 'unknown')}: context_length = {max_context}")
+            except Exception as e:
+                logger.warning(f"Lỗi khi lấy context length từ model {model.get('id', 'unknown')}: {e}")
+        
+        if context_lengths:
+            max_context = max(context_lengths)
+            logger.info(f"Max context length từ tất cả models: {max_context}")
+            
+            # Tạo host string
+            host_string = f"{host}:{port}"
+            
+            # Set environment variables cho process hiện tại
+            os.environ['OLLAMA_CONTEXT_LENGTH'] = str(max_context)
+            os.environ['OLLAMA_HOST'] = host_string
+            os.environ['OLLAMA_ORIGINS'] = host_string
+            
+            # Set environment variables cho system (Windows/Linux)
+            try:
+                if os.name == 'nt':  # Windows
+                    import subprocess
+                    # Set user environment variables
+                    subprocess.run([
+                        'setx', 'OLLAMA_CONTEXT_LENGTH', str(max_context)
+                    ], check=True, capture_output=True)
+                    subprocess.run([
+                        'setx', 'OLLAMA_HOST', host_string
+                    ], check=True, capture_output=True)
+                    subprocess.run([
+                        'setx', 'OLLAMA_ORIGINS', host_string
+                    ], check=True, capture_output=True)
+                    logger.info(f"Đã set OLLAMA environment variables vào Windows user environment:")
+                    logger.info(f"  OLLAMA_CONTEXT_LENGTH = {max_context}")
+                    logger.info(f"  OLLAMA_HOST = {host_string}")
+                    logger.info(f"  OLLAMA_ORIGINS = {host_string}")
+                else:  # Linux/Unix
+                    import subprocess
+                    # Set user environment variables trong ~/.bashrc hoặc ~/.profile
+                    home_dir = os.path.expanduser('~')
+                    bashrc_path = os.path.join(home_dir, '.bashrc')
+                    profile_path = os.path.join(home_dir, '.profile')
+                    
+                    env_lines = [
+                        f'export OLLAMA_CONTEXT_LENGTH={max_context}\n',
+                        f'export OLLAMA_HOST={host_string}\n',
+                        f'export OLLAMA_ORIGINS={host_string}\n'
+                    ]
+                    
+                    # Thêm vào .bashrc nếu tồn tại
+                    if os.path.exists(bashrc_path):
+                        with open(bashrc_path, 'a') as f:
+                            for line in env_lines:
+                                f.write(line)
+                        logger.info(f"Đã thêm OLLAMA environment variables vào ~/.bashrc")
+                    
+                    # Thêm vào .profile nếu tồn tại
+                    if os.path.exists(profile_path):
+                        with open(profile_path, 'a') as f:
+                            for line in env_lines:
+                                f.write(line)
+                        logger.info(f"Đã thêm OLLAMA environment variables vào ~/.profile")
+                    
+                    # Set cho session hiện tại
+                    os.environ['OLLAMA_CONTEXT_LENGTH'] = str(max_context)
+                    os.environ['OLLAMA_HOST'] = host_string
+                    os.environ['OLLAMA_ORIGINS'] = host_string
+                    logger.info(f"Đã set OLLAMA environment variables cho session hiện tại:")
+                    logger.info(f"  OLLAMA_CONTEXT_LENGTH = {max_context}")
+                    logger.info(f"  OLLAMA_HOST = {host_string}")
+                    logger.info(f"  OLLAMA_ORIGINS = {host_string}")
+                    
+            except Exception as e:
+                logger.warning(f"Không thể set system environment variables: {e}")
+                logger.info(f"Đã set OLLAMA environment variables cho process hiện tại:")
+                logger.info(f"  OLLAMA_CONTEXT_LENGTH = {max_context}")
+                logger.info(f"  OLLAMA_HOST = {host_string}")
+                logger.info(f"  OLLAMA_ORIGINS = {host_string}")
+            
+            return max_context
+        else:
+            logger.warning("Không tìm thấy context length nào từ models")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Lỗi khi lấy max context length: {e}")
+        return None
+
 # Parse arguments first
 args = parse_arguments()
 
@@ -189,6 +316,17 @@ def start_embedded(host: str, port: int):
     try:
         if HTTP_SERVER is not None:
             return True
+        
+        # Lấy max context length và set environment variables trước khi start server
+        max_context = get_max_context_length(host, port)
+        if max_context:
+            _ui_log(f"✅ Đã set OLLAMA environment variables:")
+            _ui_log(f"  OLLAMA_CONTEXT_LENGTH = {max_context}")
+            _ui_log(f"  OLLAMA_HOST = {host}:{port}")
+            _ui_log(f"  OLLAMA_ORIGINS = {host}:{port}")
+        else:
+            _ui_log("⚠️ Không thể lấy max context length từ models", level="warning")
+        
         HTTP_SERVER = make_server(host, port, app)
         import threading
         HTTP_THREAD = threading.Thread(target=HTTP_SERVER.serve_forever, daemon=True)
@@ -520,6 +658,22 @@ if __name__ == '__main__':
     # Set background mode if specified
     if args.background:
         BACKGROUND_MODE = True
+    
+    # Lấy max context length và set environment variables khi chạy trực tiếp
+    if not BACKGROUND_MODE:
+        # Đọc host và port từ ui_settings.json
+        max_context = get_max_context_length()
+        if max_context:
+            # Đọc lại settings để hiển thị thông tin chính xác
+            settings = load_ui_settings()
+            host = settings.get("ip_address", "127.0.0.1")
+            port = settings.get("port", 11434)
+            print(f"✅ Đã set OLLAMA environment variables:")
+            print(f"  OLLAMA_CONTEXT_LENGTH = {max_context}")
+            print(f"  OLLAMA_HOST = {host}:{port}")
+            print(f"  OLLAMA_ORIGINS = {host}:{port}")
+        else:
+            print("⚠️ Không thể lấy max context length từ models")
     
     # Only GUI UI supported; exit if cannot initialize
     if not BACKGROUND_MODE:
