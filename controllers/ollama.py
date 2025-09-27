@@ -1,5 +1,9 @@
 from flask import Blueprint, jsonify, Response, request, current_app
 from utils.request_utils import parse_json_request
+from utils.context_manager import context_manager
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 ollama_bp = Blueprint('ollama', __name__)
@@ -313,6 +317,7 @@ def ollama_generate():
 
     ui_manager = app.config['ui_manager']
     ollama_service = app.config['ollama_service']
+    get_cached_qwen_models = app.config['get_cached_qwen_models']
 
     data = request.json_data
     model = data.get('model', 'qwen3-235b-a22b')
@@ -341,6 +346,19 @@ def ollama_generate():
         messages.append({"role": "prompt", "content": prompt})
     if template:
         messages.append({"role": "template", "content": template})
+
+    # Xử lý context limiting cho generate endpoint
+    try:
+        cached_models = get_cached_qwen_models()
+        trimmed_messages, context_info = context_manager.process_messages_for_context(
+            messages, model, cached_models
+        )
+        
+        if context_info.get('trimmed'):
+            logger.info(f"Context trimmed for model {model} in generate: {context_info}")
+            messages = trimmed_messages
+    except Exception as e:
+        logger.warning(f"Error processing context limiting in generate: {e}")
 
     openai_data = {
         "model": model,
@@ -447,6 +465,7 @@ def ollama_chat():
 
     ui_manager = app.config['ui_manager']
     ollama_service = app.config['ollama_service']
+    get_cached_qwen_models = app.config['get_cached_qwen_models']
 
     data = request.json_data
     model = data.get('model', 'qwen3-235b-a22b')
@@ -455,6 +474,20 @@ def ollama_chat():
     tools = data.get('tools', [])
     if model.endswith(':latest'):
         model = model[:-7]
+
+    # Xử lý context limiting
+    try:
+        cached_models = get_cached_qwen_models()
+        trimmed_messages, context_info = context_manager.process_messages_for_context(
+            messages, model, cached_models
+        )
+        
+        if context_info.get('trimmed'):
+            logger.info(f"Context trimmed for model {model}: {context_info}")
+            # Cập nhật messages với version đã trim
+            messages = trimmed_messages
+    except Exception as e:
+        logger.warning(f"Error processing context limiting: {e}")
 
     route_info = f"POST /api/chat - Ollama Chat ({model}, stream: {stream})"
     ui_manager.update_route(route_info, _make_display_data_short(data))

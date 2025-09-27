@@ -3,6 +3,7 @@ import time
 import uuid
 
 from utils.request_utils import parse_json_request
+from utils.context_manager import context_manager
 
 
 lmstudio_bp = Blueprint('lmstudio', __name__)
@@ -163,6 +164,7 @@ def chat_completions():
     RequestState = app.config['RequestState']
     logger = app.config['logger']
     SERVER_MODE = app.config.get('SERVER_MODE')
+    get_cached_qwen_models = app.config['get_cached_qwen_models']
 
     data = request.get_json()
     stream = data.get('stream', False)
@@ -171,6 +173,21 @@ def chat_completions():
     if SERVER_MODE == "ollama" and model.endswith(':latest'):
         model = model[:-7]
         data['model'] = model
+
+    # Xử lý context limiting cho LM Studio endpoint
+    try:
+        messages = data.get('messages', [])
+        if messages:
+            cached_models = get_cached_qwen_models()
+            trimmed_messages, context_info = context_manager.process_messages_for_context(
+                messages, model, cached_models
+            )
+            
+            if context_info.get('trimmed'):
+                logger.info(f"Context trimmed for model {model} in LM Studio: {context_info}")
+                data['messages'] = trimmed_messages
+    except Exception as e:
+        logger.warning(f"Error processing context limiting in LM Studio: {e}")
 
     route_info = f"POST /v1/chat/completions - Chat ({model}, stream: {stream})"
     ui_manager.update_route(route_info, _make_display_data_short(data))
