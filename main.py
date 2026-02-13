@@ -165,7 +165,7 @@ def get_max_context_length(host: str = None, port: int = None):
             logger.info(f"Max context length từ tất cả models: {max_context}")
             
             # Tạo host string
-            host_string = f"{host}:{port}"
+            host_string = f"http://{host}:{port}"
             
             # Set environment variables cho process hiện tại
             os.environ['OLLAMA_CONTEXT_LENGTH'] = str(max_context)
