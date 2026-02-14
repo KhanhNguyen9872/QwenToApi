@@ -92,7 +92,7 @@ class ChatService:
                                     
                                     retry_response = requests.post(
                                         f"{QWEN_CHAT_COMPLETIONS_URL}?chat_id={new_chat_id}",
-                                        headers=QWEN_HEADERS,
+                                        headers=headers,
                                         json=qwen_data,
                                         stream=True,
                                         timeout=300
@@ -563,7 +563,7 @@ class ChatService:
                                     
                                     retry_response = requests.post(
                                         f"{QWEN_CHAT_COMPLETIONS_URL}?chat_id={new_chat_id}",
-                                        headers=QWEN_HEADERS,
+                                        headers=headers,
                                         json=qwen_data,
                                         timeout=300
                                     )

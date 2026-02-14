@@ -31,6 +31,8 @@ class GUIUI:
         self._last_scale = 1.5  # For font calculations
         self.selected_model = None
         self.cookie_value = ""
+        self.bx_ua_value = ""
+        self.bx_umidtoken_value = ""
         # Load persisted settings (ui_scale, ip, port, mode, selected_model)
         self._load_settings()
         self.log_lines = []
@@ -1047,9 +1049,26 @@ Escape    - Close popup windows
         except Exception:
             pass
 
+        # Optional anti-bot headers (bx-ua, bx-umidtoken) - not required
+        bx_card = ttk.Frame(settings_tab, style='Card.TFrame')
+        bx_card.grid(row=2, column=0, sticky="ew", pady=10, padx=10)
+        bx_card.grid_columnconfigure(1, weight=1)
+        ttk.Label(bx_card, text="Optional request headers (only sent when set)",
+                  style='CardHeader.TLabel').grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
+        ttk.Label(bx_card, text="bx-ua:", font=('Helvetica', int(9 * scale))).grid(row=1, column=0, sticky="w", padx=10, pady=4)
+        self.bx_ua_entry = ttk.Entry(bx_card, font=('Consolas', int(9 * scale)), width=60)
+        self.bx_ua_entry.grid(row=1, column=1, sticky="ew", padx=10, pady=4)
+        if getattr(self, 'bx_ua_value', ''):
+            self.bx_ua_entry.insert(0, self.bx_ua_value)
+        ttk.Label(bx_card, text="bx-umidtoken:", font=('Helvetica', int(9 * scale))).grid(row=2, column=0, sticky="w", padx=10, pady=4)
+        self.bx_umidtoken_entry = ttk.Entry(bx_card, font=('Consolas', int(9 * scale)), width=60)
+        self.bx_umidtoken_entry.grid(row=2, column=1, sticky="ew", padx=10, pady=4)
+        if getattr(self, 'bx_umidtoken_value', ''):
+            self.bx_umidtoken_entry.insert(0, self.bx_umidtoken_value)
+
         # Save button moved to bottom of Settings tab
         bottom_save_frame = ttk.Frame(settings_tab)
-        bottom_save_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+        bottom_save_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
         bottom_save_frame.grid_columnconfigure(0, weight=1)
 
         # Refresh Model Cache button
@@ -2414,6 +2433,14 @@ Use the Settings tab to configure the server mode.
                 self.cookie_value = self.cookie_text.get(1.0, tk.END).strip()
         except Exception:
             pass
+        # Read optional bx headers (if present in UI)
+        try:
+            if hasattr(self, 'bx_ua_entry'):
+                self.bx_ua_value = (self.bx_ua_entry.get() or "").strip()
+            if hasattr(self, 'bx_umidtoken_entry'):
+                self.bx_umidtoken_value = (self.bx_umidtoken_entry.get() or "").strip()
+        except Exception:
+            pass
 
         # Save updated settings
         self._save_settings()
@@ -2633,6 +2660,12 @@ Use the Settings tab to configure the server mode.
             if hasattr(self, 'cookie_text'):
                 cookie_font_size = int(9 * scale)
                 self.cookie_text.config(font=('Consolas', cookie_font_size))
+
+            entry_font_size = int(9 * scale)
+            if hasattr(self, 'bx_ua_entry'):
+                self.bx_ua_entry.config(font=('Consolas', entry_font_size))
+            if hasattr(self, 'bx_umidtoken_entry'):
+                self.bx_umidtoken_entry.config(font=('Consolas', entry_font_size))
 
             # Update status labels
             status_font_size = int(10 * scale)
@@ -2962,6 +2995,8 @@ Escape    - Close Popups"""
                     self.mode = settings.get('mode', self.mode)
                     self.selected_model = settings.get('selected_model', self.selected_model)
                     self.cookie_value = settings.get('cookie', self.cookie_value)
+                    self.bx_ua_value = settings.get('bx_ua', getattr(self, 'bx_ua_value', '') or '')
+                    self.bx_umidtoken_value = settings.get('bx_umidtoken', getattr(self, 'bx_umidtoken_value', '') or '')
         except Exception as e:
             logger.warning(f"Could not load settings: {e}")
 
@@ -2989,6 +3024,10 @@ Escape    - Close Popups"""
                 settings['selected_model'] = self.selected_model
             if getattr(self, 'cookie_value', None) is not None:
                 settings['cookie'] = self.cookie_value
+            if getattr(self, 'bx_ua_value', None) is not None:
+                settings['bx_ua'] = self.bx_ua_value
+            if getattr(self, 'bx_umidtoken_value', None) is not None:
+                settings['bx_umidtoken'] = self.bx_umidtoken_value
 
             # Save settings
             with open(settings_file, 'w', encoding='utf-8') as f:

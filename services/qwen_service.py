@@ -7,7 +7,7 @@ import os
 import base64
 import hashlib
 from urllib.parse import urlparse, parse_qs, unquote_plus
-from config import QWEN_HEADERS, QWEN_MODELS_URL, QWEN_NEW_CHAT_URL, QWEN_CHAT_COMPLETIONS_URL, TMP_FOLDER, curl_user_agent
+from config import QWEN_HEADERS, QWEN_MODELS_URL, QWEN_NEW_CHAT_URL, QWEN_CHAT_COMPLETIONS_URL, QWEN_COMPLETIONS_BODY_VERSION, QWEN_REFERER_NEW_CHAT, TMP_FOLDER, curl_user_agent
 from utils.cookie_parser import build_header
 
 logger = logging.getLogger(__name__)
@@ -96,12 +96,13 @@ class QwenService:
             chat_data = {
                 "title": "New Chat",
                 "models": [model],
-                "chat_mode": "guest",
+                "chat_mode": "normal",
                 "chat_type": "t2t",
-                "timestamp": int(time.time() * 1000)
+                "timestamp": int(time.time() * 1000),
+                "project_id": ""
             }
-            
             headers = build_header(QWEN_HEADERS)
+            headers["Referer"] = QWEN_REFERER_NEW_CHAT
             response = requests.post(QWEN_NEW_CHAT_URL, headers=headers, json=chat_data)
             
             if response.status_code == 200:
@@ -123,6 +124,7 @@ class QwenService:
         qwen_data = {
             "stream": data.get('stream', False),
             "incremental_output": data.get('stream', False),
+            "version": QWEN_COMPLETIONS_BODY_VERSION,
             "chat_id": chat_id,
             "chat_mode": "normal",  # Thay đổi từ "guest" sang "normal"
             "model": model,
