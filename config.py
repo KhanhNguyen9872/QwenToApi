@@ -3,7 +3,7 @@ import uuid
 x_request_id = str(uuid.uuid4())
 
 # Application version
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 TMP_FOLDER = "./tmp"
 
 # URLs
