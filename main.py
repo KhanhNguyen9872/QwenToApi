@@ -170,7 +170,7 @@ def get_max_context_length(host: str = None, port: int = None):
             # Set environment variables cho process hiện tại
             os.environ['OLLAMA_CONTEXT_LENGTH'] = str(max_context)
             os.environ['OLLAMA_HOST'] = host_string
-            os.environ['OLLAMA_ORIGINS'] = host_string
+            os.environ['OLLAMA_ORIGINS'] = "*"
             
             # Set environment variables cho system (Windows/Linux)
             try:
@@ -184,12 +184,12 @@ def get_max_context_length(host: str = None, port: int = None):
                         'setx', 'OLLAMA_HOST', host_string
                     ], check=True, capture_output=True)
                     subprocess.run([
-                        'setx', 'OLLAMA_ORIGINS', host_string
+                        'setx', 'OLLAMA_ORIGINS', "*"
                     ], check=True, capture_output=True)
                     logger.info(f"Đã set OLLAMA environment variables vào Windows user environment:")
                     logger.info(f"  OLLAMA_CONTEXT_LENGTH = {max_context}")
                     logger.info(f"  OLLAMA_HOST = {host_string}")
-                    logger.info(f"  OLLAMA_ORIGINS = {host_string}")
+                    logger.info(f"  OLLAMA_ORIGINS = *")
                 else:  # Linux/Unix
                     import subprocess
                     # Set user environment variables trong ~/.bashrc hoặc ~/.profile
@@ -200,7 +200,7 @@ def get_max_context_length(host: str = None, port: int = None):
                     env_lines = [
                         f'export OLLAMA_CONTEXT_LENGTH={max_context}\n',
                         f'export OLLAMA_HOST={host_string}\n',
-                        f'export OLLAMA_ORIGINS={host_string}\n'
+                        f'export OLLAMA_ORIGINS=*\n'
                     ]
                     
                     # Thêm vào .bashrc nếu tồn tại
@@ -220,18 +220,18 @@ def get_max_context_length(host: str = None, port: int = None):
                     # Set cho session hiện tại
                     os.environ['OLLAMA_CONTEXT_LENGTH'] = str(max_context)
                     os.environ['OLLAMA_HOST'] = host_string
-                    os.environ['OLLAMA_ORIGINS'] = host_string
+                    os.environ['OLLAMA_ORIGINS'] = "*"
                     logger.info(f"Đã set OLLAMA environment variables cho session hiện tại:")
                     logger.info(f"  OLLAMA_CONTEXT_LENGTH = {max_context}")
                     logger.info(f"  OLLAMA_HOST = {host_string}")
-                    logger.info(f"  OLLAMA_ORIGINS = {host_string}")
+                    logger.info(f"  OLLAMA_ORIGINS = *")
                     
             except Exception as e:
                 logger.warning(f"Không thể set system environment variables: {e}")
                 logger.info(f"Đã set OLLAMA environment variables cho process hiện tại:")
                 logger.info(f"  OLLAMA_CONTEXT_LENGTH = {max_context}")
                 logger.info(f"  OLLAMA_HOST = {host_string}")
-                logger.info(f"  OLLAMA_ORIGINS = {host_string}")
+                logger.info(f"  OLLAMA_ORIGINS = *")
             
             return max_context
         else:
@@ -323,7 +323,7 @@ def start_embedded(host: str, port: int):
             _ui_log(f"✅ Đã set OLLAMA environment variables:")
             _ui_log(f"  OLLAMA_CONTEXT_LENGTH = {max_context}")
             _ui_log(f"  OLLAMA_HOST = {host}:{port}")
-            _ui_log(f"  OLLAMA_ORIGINS = {host}:{port}")
+            _ui_log(f"  OLLAMA_ORIGINS = *")
         else:
             _ui_log("⚠️ Không thể lấy max context length từ models", level="warning")
         
@@ -671,7 +671,7 @@ if __name__ == '__main__':
             print(f"✅ Đã set OLLAMA environment variables:")
             print(f"  OLLAMA_CONTEXT_LENGTH = {max_context}")
             print(f"  OLLAMA_HOST = {host}:{port}")
-            print(f"  OLLAMA_ORIGINS = {host}:{port}")
+            print(f"  OLLAMA_ORIGINS = *")
         else:
             print("⚠️ Không thể lấy max context length từ models")
     
