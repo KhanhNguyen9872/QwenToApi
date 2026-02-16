@@ -8,6 +8,12 @@ from datetime import datetime
 import socket
 import logging
 
+
+import requests
+import json
+from .cookie_parser import build_header
+from config import QWEN_HEADERS
+
 logger = logging.getLogger(__name__)
 
 class GUIUI:
@@ -734,6 +740,9 @@ Escape    - Close popup windows
         # Create tabs
         self._create_main_tab()
         self._create_logs_tab()
+
+        # Add Qwen Settings tab if cookie is present
+        self._create_qwen_settings_tab()
         self._create_settings_tab()
 
         # Control panel
@@ -778,6 +787,475 @@ Escape    - Close popup windows
                   style='Secondary.TButton',
                   command=self._show_about).grid(row=0, column=2, padx=5)
 
+    def _fetch_qwen_user_settings(self):
+        """Fetch user settings from Qwen API"""
+        if not self.cookie_value:
+            return None
+            
+        try:
+            headers = build_header(QWEN_HEADERS, self.cookie_value)
+            response = requests.get("https://chat.qwen.ai/api/v2/users/user/settings", headers=headers, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("success"):
+                    return data.get("data")
+            else:
+                logger.warning(f"Failed to fetch Qwen settings: {response.status_code} {response.text}")
+        except Exception as e:
+            logger.error(f"Error fetching Qwen settings: {e}")
+        return None
+
+    # _update_qwen_setting removed in favor of batch save
+
+
+    def _save_qwen_settings(self):
+        """Save all modified Qwen settings"""
+        if not self.qwen_settings_vars:
+            return
+            
+        updated_count = 0
+        failed_count = 0
+        
+        # Disable save button during save
+        if hasattr(self, 'btn_save_settings'):
+            self.btn_save_settings.config(state="disabled")
+            
+        try:
+            # Group updates by section to potentially batch them if API allows, 
+            # though current implementation sends one request per setting for simplicity/safety
+            # based on previous _update_qwen_setting behavior
+            
+            for section_key, var in self.qwen_settings_vars.items():
+                section, key = section_key.split('.', 1)
+                
+                # Get original value
+                original_section = self.qwen_original_data.get(section, {})
+                original_value = original_section.get(key)
+                
+                current_value = var.get()
+                
+                # Compare values
+                if current_value != original_value:
+                    # Value changed, update it
+                    # Note: Running in main thread here might freeze UI if many updates. 
+                    # Ideally should be in a thread, but for simplicity we keep it here 
+                    # or spawn a thread that updates UI after.
+                    # Let's use a thread to avoid freezing.
+                    threading.Thread(target=self._perform_single_update, 
+                                   args=(section, key, current_value)).start()
+                    updated_count += 1
+                    
+                    # Update original data to reflect change immediately (optimistic update)
+                    if section not in self.qwen_original_data:
+                        self.qwen_original_data[section] = {}
+                    self.qwen_original_data[section][key] = current_value
+
+            if updated_count > 0:
+                messagebox.showinfo("Settings Saved", f"Initiated update for {updated_count} settings.")
+                # Save button will stay disabled until next change
+            else:
+                messagebox.showinfo("No Changes", "No settings were modified.")
+                
+        except Exception as e:
+            logger.error(f"Error saving Qwen settings: {e}")
+            messagebox.showerror("Error", f"Error saving settings: {e}")
+            # Re-enable save button in case of error
+            self._check_settings_changed()
+
+    def _perform_single_update(self, section, key, value):
+        """Helper to perform update in background"""
+        try:
+            # Reuse the logic from _update_qwen_setting but adapted
+            headers = build_header(QWEN_HEADERS, self.cookie_value)
+            headers["Content-Type"] = "application/json"
+            payload = {section: {key: value}}
+            url = "https://chat.qwen.ai/api/v2/users/user/settings/update"
+            response = requests.post(url, headers=headers, json=payload, timeout=5)
+            
+            if response.status_code == 200 and response.json().get("success"):
+                logger.info(f"Successfully saved setting: {section}.{key} = {value}")
+            else:
+                logger.warning(f"Failed to save setting {section}.{key}: {response.text}")
+        except Exception as e:
+            logger.error(f"Exception saving setting {section}.{key}: {e}")
+
+    def _refresh_qwen_settings(self):
+        """Refresh Qwen settings from server"""
+        # Disable refresh button temporarily
+        if hasattr(self, 'btn_refresh_settings'):
+            self.btn_refresh_settings.config(state="disabled")
+            
+        def _refresh_task():
+            try:
+                new_data = self._fetch_qwen_user_settings()
+                if new_data:
+                    # Update original data
+                    self.qwen_original_data = new_data
+                    
+                    # Update UI variables in main thread
+                    self.root.after(0, self._update_ui_from_data, new_data)
+                else:
+                    self.root.after(0, lambda: messagebox.showerror("Error", "Failed to fetch settings"))
+            except Exception as e:
+                logger.error(f"Error refreshing settings: {e}")
+            finally:
+                if hasattr(self, 'btn_refresh_settings'):
+                    self.root.after(0, lambda: self.btn_refresh_settings.config(state="normal"))
+
+        threading.Thread(target=_refresh_task).start()
+
+    def _update_ui_from_data(self, data):
+        """Update UI variables from new data"""
+        try:
+            for section_key, var in self.qwen_settings_vars.items():
+                section, key = section_key.split('.', 1)
+                if section in data and key in data[section]:
+                    # Update variable without triggering change event if possible, 
+                    # but Tkinter vars trigger traces. We need to handle that.
+                    # Actually, if we update var, it triggers trace -> _on_setting_change.
+                    # _on_setting_change compares var with self.qwen_original_data.
+                    # Since we just updated self.qwen_original_data, the comparison should match, 
+                    # so Save button should be disabled.
+                    var.set(data[section][key])
+            
+            # Re-verify save button state just in case
+            self._check_settings_changed()
+            
+            # Also update read-only fields if needed (not implementing complex logic for that now)
+            # as they are not in self.qwen_settings_vars
+            
+            messagebox.showinfo("Refreshed", "Settings refreshed from server.")
+        except Exception as e:
+            logger.error(f"Error updating UI from data: {e}")
+
+    def _check_settings_changed(self, *args):
+        """Check if any setting changed from original"""
+        has_changes = False
+        for section_key, var in self.qwen_settings_vars.items():
+            section, key = section_key.split('.', 1)
+            original = self.qwen_original_data.get(section, {}).get(key)
+            current = var.get()
+            if current != original:
+                has_changes = True
+                break
+        
+        if hasattr(self, 'btn_save_settings'):
+            if has_changes:
+                self.btn_save_settings.config(state="normal")
+            else:
+                self.btn_save_settings.config(state="disabled")
+
+    def _delete_all_memories(self):
+        """Delete all memories via API"""
+        if not self.cookie_value:
+            return
+
+        # Confirm with user
+        if not messagebox.askyesno(
+            "Delete All Memories",
+            "This will delete all memories stored by Qwen.\n\n"
+            "Memories allow Qwen to remember details about you and your preferences across conversations.\n\n"
+            "Are you sure you want to proceed?",
+            icon='warning'):
+            return
+
+        try:
+            headers = build_header(QWEN_HEADERS, self.cookie_value)
+            headers["Content-Type"] = "application/json"
+            
+            payload = {"forget_all": True}
+            
+            url = "https://chat.qwen.ai/api/v2/memories/delete"
+            response = requests.post(url, headers=headers, json=payload, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("success"):
+                    msg = data.get("data", {}).get("message", "Memories deleted successfully")
+                    logger.info(f"Delete memories success: {msg}")
+                    messagebox.showinfo("Success", msg)
+                    # Refresh memory list
+                    self._update_memory_list_display()
+                else:
+                    logger.warning(f"Failed to delete memories (API error): {data}")
+                    messagebox.showerror("Error", f"Failed to delete memories: {data}")
+            else:
+                logger.warning(f"Failed to delete memories: {response.status_code} {response.text}")
+                messagebox.showerror("Error", f"Failed to delete memories: {response.status_code}")
+        except Exception as e:
+            logger.error(f"Error deleting memories: {e}")
+            messagebox.showerror("Error", f"Error deleting memories: {str(e)}")
+
+    def _fetch_qwen_memories(self):
+        """Fetch list of memories from API"""
+        if not self.cookie_value:
+            return []
+            
+        try:
+            headers = build_header(QWEN_HEADERS, self.cookie_value)
+            # Fetch first page, 50 items
+            url = "https://chat.qwen.ai/api/v2/memories/?page_size=50&page_num=1"
+            response = requests.get(url, headers=headers, timeout=5)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("success"):
+                    return data.get("data", {}).get("memory_nodes", [])
+            
+            logger.warning(f"Failed to fetch memories: {response.status_code} {response.text}")
+        except Exception as e:
+            logger.error(f"Error fetching memories: {e}")
+        return []
+
+    def _update_memory_list_display(self):
+        """Fetch and update memory list display"""
+        if not hasattr(self, 'memory_list_text'):
+            return
+
+        def _fetch_task():
+            memories = self._fetch_qwen_memories()
+            self.root.after(0, self._render_memory_list, memories)
+
+        threading.Thread(target=_fetch_task).start()
+
+    def _render_memory_list(self, memories):
+        """Render fetched memories to the text widget"""
+        if not hasattr(self, 'memory_list_text'):
+            return
+            
+        self.memory_list_text.config(state="normal")
+        self.memory_list_text.delete("1.0", tk.END)
+        
+        if not memories:
+            self.memory_list_text.insert(tk.END, "No memories found.")
+        else:
+            for mem in memories:
+                content = mem.get("content", "")
+                created_at = mem.get("created_at")
+                
+                # Format timestamp if available
+                date_str = ""
+                if created_at:
+                    try:
+                        date_str = datetime.fromtimestamp(created_at).strftime('%Y-%m-%d %H:%M')
+                    except:
+                        pass
+                
+                display_text = f"• {content}\n"
+                if date_str:
+                    display_text = f"• [{date_str}] {content}\n"
+                    
+                self.memory_list_text.insert(tk.END, display_text)
+                
+        self.memory_list_text.config(state="disabled")
+
+    def _create_qwen_settings_tab(self):
+        """Create Qwen Settings tab if data is available"""
+        settings_data = self._fetch_qwen_user_settings()
+        if not settings_data:
+            return
+            
+        # Initialize state tracking
+        self.qwen_original_data = settings_data
+        self.qwen_settings_vars = {}
+
+        qwen_tab = ttk.Frame(self.notebook)
+        self.notebook.add(qwen_tab, text="Qwen Settings")
+        
+        # Top toolbar for Refresh / Save
+        toolbar = ttk.Frame(qwen_tab)
+        toolbar.pack(fill="x", padx=10, pady=5)
+        
+        self.btn_refresh_settings = ttk.Button(toolbar, 
+                                             text="🔄 Refresh", 
+                                             style='Primary.TButton',
+                                             command=self._refresh_qwen_settings)
+        self.btn_refresh_settings.pack(side="left", padx=5)
+        
+        self.btn_save_settings = ttk.Button(toolbar, 
+                                          text="💾 Save Changes", 
+                                          style='Success.TButton',
+                                          command=self._save_qwen_settings,
+                                          state="disabled")
+        self.btn_save_settings.pack(side="left", padx=5)
+        
+        # Create a canvas and scrollbar for the settings
+        canvas = tk.Canvas(qwen_tab, borderwidth=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(qwen_tab, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        window_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        def _on_canvas_configure(event):
+            # Resize the inner frame to match the canvas width
+            canvas.itemconfig(window_id, width=event.width)
+        
+        canvas.bind('<Configure>', _on_canvas_configure)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Mousewheel scrolling
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        # Helper to create sections
+        def create_section(parent, title):
+            frame = ttk.LabelFrame(parent, text=title, padding=10)
+            frame.pack(fill="x", padx=5, pady=5)
+            return frame
+
+        def create_readonly_entry(parent, label_text, value):
+            frame = ttk.Frame(parent)
+            frame.pack(fill="x", pady=2)
+            ttk.Label(frame, text=label_text, width=25).pack(side="left")
+            entry = ttk.Entry(frame)
+            entry.insert(0, str(value))
+            entry.config(state="readonly")
+            entry.pack(side="left", fill="x", expand=True)
+
+        def create_checkbox(parent, label_text, value, section, key):
+            var = tk.BooleanVar(value=value)
+            # Store var for tracking
+            self.qwen_settings_vars[f"{section}.{key}"] = var
+            # Bind trace to check for changes
+            var.trace_add("write", self._check_settings_changed)
+                
+            cb = ttk.Checkbutton(parent, text=label_text, variable=var)
+            cb.pack(anchor="w", pady=2)
+            return cb, var
+
+        # Layout Columns
+        scrollable_frame.grid_columnconfigure(0, weight=1)
+        scrollable_frame.grid_columnconfigure(1, weight=1)
+        scrollable_frame.grid_columnconfigure(2, weight=1)
+        
+        left_col = ttk.Frame(scrollable_frame)
+        left_col.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        
+        mid_col = ttk.Frame(scrollable_frame)
+        mid_col.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+
+        right_col = ttk.Frame(scrollable_frame)
+        right_col.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
+
+        # 1. UI Settings (Left Column)
+        if "ui" in settings_data:
+            ui_frame = create_section(left_col, "UI Settings")
+            ui = settings_data["ui"]
+            create_checkbox(ui_frame, "Notification Enabled", ui.get("notificationEnabled"), "ui", "notificationEnabled")
+            create_checkbox(ui_frame, "Chat Bubble", ui.get("chatBubble"), "ui", "chatBubble")
+            create_checkbox(ui_frame, "Show Username", ui.get("showUsername"), "ui", "showUsername")
+            create_checkbox(ui_frame, "Widescreen Mode", ui.get("widescreenMode"), "ui", "widescreenMode")
+            create_checkbox(ui_frame, "Auto Tags", ui.get("autoTags"), "ui", "autoTags")
+            create_checkbox(ui_frame, "Large Text As File", ui.get("largeTextAsFile"), "ui", "largeTextAsFile")
+            create_checkbox(ui_frame, "Split Large Chunks", ui.get("splitLargeChunks"), "ui", "splitLargeChunks")
+            create_checkbox(ui_frame, "Scroll On Branch Change", ui.get("scrollOnBranchChange"), "ui", "scrollOnBranchChange")
+            create_checkbox(ui_frame, "Response Auto Copy", ui.get("responseAutoCopy"), "ui", "responseAutoCopy")
+
+
+        # 2. MCP Settings (Right Column)
+        if "mcp" in settings_data:
+            mcp_frame = create_section(right_col, "MCP Capabilities")
+            mcp = settings_data["mcp"]
+            for key, val in mcp.items():
+                create_checkbox(mcp_frame, key.replace("-", " ").title(), val, "mcp", key)
+
+        # 3. Memory Settings (Middle Column)
+        if "memory" in settings_data:
+            mem_frame = create_section(mid_col, "Memory Settings")
+            mem = settings_data["memory"]
+            
+            # Special handling for Memory dependency
+            cb_mem, var_mem = create_checkbox(mem_frame, "Enable Memory", mem.get("enable_memory"), "memory", "enable_memory")
+            cb_hist, var_hist = create_checkbox(mem_frame, "Enable History Memory", mem.get("enable_history_memory"), "memory", "enable_history_memory")
+            
+            # Define interaction logic
+            def _on_memory_toggle(*args):
+                if not var_mem.get():
+                    if var_hist.get():
+                        var_hist.set(False)
+                    cb_hist.config(state="disabled")
+                else:
+                    cb_hist.config(state="normal")
+            
+            # Initial state
+            _on_memory_toggle()
+            
+            # Bind to variable change
+            var_mem.trace_add("write", _on_memory_toggle)
+            
+            # Add Delete Memories button
+            ttk.Button(mem_frame, 
+                      text="🗑️ Delete All Memories", 
+                      style='Danger.TButton',
+                      command=self._delete_all_memories).pack(anchor="w", pady=5)
+            
+            # Memory List Section
+            ttk.Separator(mem_frame, orient="horizontal").pack(fill="x", pady=10)
+            
+            mem_list_header = ttk.Frame(mem_frame)
+            mem_list_header.pack(fill="x", pady=2)
+            
+            ttk.Label(mem_list_header, text="Stored Memories", font=('Helvetica', 9, 'bold')).pack(side="left")
+            
+            ttk.Button(mem_list_header, 
+                      text="🔄", 
+                      width=3,
+                      style='Primary.TButton',
+                      command=self._update_memory_list_display).pack(side="left", padx=5)
+            
+            # ScrolledText for memories
+            self.memory_list_text = scrolledtext.ScrolledText(mem_frame,
+                                                            height=20, # Increased height since it has its own column
+                                                            wrap=tk.WORD,
+                                                            font=('Consolas', 9),
+                                                            state=tk.DISABLED,
+                                                            bg='#f8f9fa',
+                                                            fg='#2c3e50')
+            self.memory_list_text.pack(fill="both", expand=True, pady=5)
+            
+            # Initial load
+            self._update_memory_list_display()
+
+        # 4. Model Config (Right Column)
+        if "model_config" in settings_data:
+            model_frame = create_section(right_col, "Model Config")
+            models = settings_data["model_config"]
+            for model_name, config in models.items():
+                if "thinking_budget" in config:
+                    create_readonly_entry(model_frame, f"{model_name} Thinking Budget", config["thinking_budget"])
+
+        # 5. TTS Speaker (Right Column)
+        if "tts_speaker" in settings_data:
+            tts_frame = create_section(right_col, "TTS Speaker")
+            tts = settings_data["tts_speaker"]
+            create_readonly_entry(tts_frame, "Speaker", tts.get("speaker"))
+            create_readonly_entry(tts_frame, "Gender", tts.get("gender"))
+            if tts.get("description"):
+                ttk.Label(tts_frame, text="Description:").pack(anchor="w")
+                desc = tk.Text(tts_frame, height=2, width=40, font=('Helvetica', 9))
+                desc.insert("1.0", tts.get("description"))
+                desc.config(state="disabled", bg=self.root.cget("bg"), relief="flat")
+                desc.pack(fill="x", pady=2)
+        
+        # 6. Code Settings (Right Column)
+        if "code_settings" in settings_data:
+            code_frame = create_section(right_col, "Code Settings")
+            code = settings_data["code_settings"]
+            if code.get("diff_display"):
+                create_readonly_entry(code_frame, "Diff Display", code.get("diff_display"))
+
+
+
     def _create_main_tab(self):
         """Create the main tab with server status and route info"""
         main_tab = ttk.Frame(self.notebook)
@@ -798,6 +1276,8 @@ Escape    - Close popup windows
 
         # Server info using responsive grid
         info_frame = ttk.Frame(status_card)
+
+
         info_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=10)
         info_frame.grid_columnconfigure(1, weight=1)
         info_frame.grid_columnconfigure(3, weight=1)
@@ -891,9 +1371,14 @@ Escape    - Close popup windows
         self.parent_id_value.grid(row=1, column=3, sticky="w", padx=5)
 
         ttk.Button(chat_ctrl_card,
+                  text="🗑️ Delete All",
+                  style='Danger.TButton',
+                  command=self._delete_all_chats).grid(row=1, column=4, sticky="e", padx=(10, 5))
+
+        ttk.Button(chat_ctrl_card,
                   text="✨ New Chat",
                   style='Secondary.TButton',
-                  command=self._create_new_chat).grid(row=1, column=4, sticky="e", padx=10)
+                  command=self._create_new_chat).grid(row=1, column=5, sticky="e", padx=5)
     
     def _create_logs_tab(self):
         """Create the logs tab with log viewer"""
@@ -2340,21 +2825,22 @@ Please select a server mode first:
 Use the Settings tab to configure the server mode.
 """
 
-    def _create_new_chat(self):
-        """Create a new chat session with confirmation"""
+    def _create_new_chat(self, confirm=True):
+        """Create a new chat session with optional confirmation"""
         try:
-            # Show confirmation dialog first
-            current_chat = self.current_chat_id or "None"
-            result = messagebox.askyesno(
-                "New Chat Session",
-                f"Create a new chat session?\n\n"
-                f"Current chat: {current_chat}\n"
-                f"This will start a fresh conversation.",
-                icon='question'
-            )
+            if confirm:
+                # Show confirmation dialog first
+                current_chat = self.current_chat_id or "None"
+                result = messagebox.askyesno(
+                    "New Chat Session",
+                    f"Create a new chat session?\n\n"
+                    f"Current chat: {current_chat}\n"
+                    f"This will start a fresh conversation.",
+                    icon='question'
+                )
 
-            if not result:
-                return  # User clicked No
+                if not result:
+                    return  # User clicked No
 
             # Import here to avoid circular imports
             from utils.chat_manager import chat_manager
@@ -2373,13 +2859,62 @@ Use the Settings tab to configure the server mode.
                     self.connection_status.config(text=f"New chat: {chat_id[:8]}...")
                     self.root.after(3000, lambda: self.connection_status.config(text="Ready"))
 
-                messagebox.showinfo("Success", f"New chat session created: {chat_id}")
+                if confirm:
+                    messagebox.showinfo("Success", f"New chat session created: {chat_id}")
             else:
-                messagebox.showerror("Error", "Failed to create new chat session")
+                if confirm:
+                    messagebox.showerror("Error", "Failed to create new chat session")
+                else:
+                    logger.error("Failed to create new chat session automatically")
 
         except Exception as e:
             logger.error(f"Error creating new chat: {e}")
             messagebox.showerror("Error", f"Failed to create new chat: {str(e)}")
+
+    def _delete_all_chats(self):
+        """Delete all chat history with confirmation"""
+        try:
+            # Show confirmation dialog
+            result = messagebox.askyesno(
+                "Delete All Chats",
+                "⚠️ WARNING: This will delete ALL chat history!\n\n"
+                "Are you sure you want to proceed?\n"
+                "This action cannot be undone.",
+                icon='warning'
+            )
+            
+            if not result:
+                return
+
+            # Update status
+            if hasattr(self, 'connection_status'):
+                self.connection_status.config(text="Deleting all chats...")
+                self.root.update()
+
+            # Import service
+            from services.qwen_service import qwen_service
+            
+            # Call delete API
+            success = qwen_service.delete_all_chats()
+            
+            if success:
+                # Show success message
+                messagebox.showinfo("Success", "All chat history has been deleted.")
+                
+                # Create new chat automatically without confirmation
+                self._create_new_chat(confirm=False)
+            else:
+                messagebox.showerror("Error", "Failed to delete chat history. Please checks logs for details.")
+                if hasattr(self, 'connection_status'):
+                    self.connection_status.config(text="Delete failed")
+                    self.root.after(3000, lambda: self.connection_status.config(text="Ready"))
+                    
+        except Exception as e:
+            logger.error(f"Error deleting all chats: {e}")
+            messagebox.showerror("Error", f"Failed to delete all chats: {str(e)}")
+            if hasattr(self, 'connection_status'):
+                self.connection_status.config(text="Delete failed")
+                self.root.after(3000, lambda: self.connection_status.config(text="Ready"))
     
     def _show_logs(self):
         """Show logs in the logs tab"""

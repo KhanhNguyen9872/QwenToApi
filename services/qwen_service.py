@@ -7,7 +7,7 @@ import os
 import base64
 import hashlib
 from urllib.parse import urlparse, parse_qs, unquote_plus
-from config import QWEN_HEADERS, QWEN_MODELS_URL, QWEN_NEW_CHAT_URL, QWEN_CHAT_COMPLETIONS_URL, QWEN_COMPLETIONS_BODY_VERSION, QWEN_REFERER_NEW_CHAT, TMP_FOLDER, curl_user_agent
+from config import QWEN_HEADERS, QWEN_MODELS_URL, QWEN_NEW_CHAT_URL, QWEN_CHAT_COMPLETIONS_URL, QWEN_COMPLETIONS_BODY_VERSION, QWEN_REFERER_NEW_CHAT, TMP_FOLDER, curl_user_agent, QWEN_API_BASE
 from utils.cookie_parser import build_header
 
 logger = logging.getLogger(__name__)
@@ -118,6 +118,29 @@ class QwenService:
         except Exception as e:
             logger.error(f"Error creating new chat: {e}")
             return None
+
+    def delete_all_chats(self):
+        """Xóa tất cả lịch sử chat"""
+        try:
+            headers = build_header(QWEN_HEADERS)
+            # URL: https://chat.qwen.ai/api/v2/chats/
+            url = f"{QWEN_API_BASE}/v2/chats/"
+            
+            response = requests.delete(url, headers=headers)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('success'):
+                    logger.info("Deleted all chats successfully")
+                    return True
+                else:
+                    logger.error(f"Failed to delete all chats: {result}")
+            else:
+                logger.error(f"Delete all chats error: {response.status_code} - {response.text}")
+            return False
+        except Exception as e:
+            logger.error(f"Error deleting all chats: {e}")
+            return False
     
     def prepare_qwen_request(self, data, chat_id, model, parent_id=None):
         """Chuẩn bị request data cho Qwen API"""
